@@ -1,8 +1,11 @@
+from rich.console import Console
+from rich.table import Table, Column
 import re
+import sys
 from typing import Any
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 RESULTS_URL = "https://www.supercrosslive.com/results/current/"
 URL_POSTFIX = {
@@ -11,6 +14,17 @@ URL_POSTFIX = {
     # 250: "S2F1RES.html",  # provisional 250 results
     # 450: "S1F1RES.html",  # provisional 450 results
 }
+STATS = [
+    "Position",
+    "#",
+    "Rider",
+    "Hometown",
+    "Bike",
+    "Qual",
+    "Holeshot",
+    "Laps Led",
+    "Points",
+]
 
 
 def scrape_results(season: int, race_num: int, bike: int = 450) -> dict | None:
@@ -44,6 +58,7 @@ def scrape_results(season: int, race_num: int, bike: int = 450) -> dict | None:
         "Season": season,
         "Round": race_num,
         "Name": race_info[1].text,
+        "Class": bike,
         "City": _get_city(race_info[2].text),
         "State": _get_state(race_info[2].text),
         "Date": _get_date(race_info[3].text),
@@ -65,28 +80,20 @@ def _get_date(val: str) -> str:
     return ""
 
 
-def _get_element_text(val) -> str:
-    if not val:
+def _get_td_text(label: str, row: Tag | None, params: dict[str, str]) -> str | int | bool:
+    if not row:
         return ""
-    return val.text
+    if not (td := row.find("td", params)):
+        return ""
+    if td.text.isnumeric():
+        return int(td.text)
+    if label == "Holeshot":
+        return td.text.upper() == "X"
+    return td.text
 
 
-def _get_results(rows: list) -> list[dict[str, Any]]:
-    cols = [
-        "#",
-        "Rider",
-        "Hometown",
-        "Bike",
-        "Qual",
-        "Holeshot",
-        "Laps Led",
-        "Position",
-        "Points",
-    ]
-    return [
-        {col: _get_element_text(row.find("td", {"data-title": col})) for col in cols}
-        for row in rows
-    ]
+def _get_results(rows: list[Tag]) -> list[dict[str, Any]]:
+    return [{col: _get_td_text(col, row, {"data-title": col}) for col in STATS} for row in rows]
 
 
 def _get_state(val: str) -> str:
@@ -101,13 +108,36 @@ def _race_url(season: int, race_num: int) -> str:
 
 
 if __name__ == "__main__":
-    race = scrape_results(2019, 1, 450)
+    args = sys.argv
+    year = int(args[1])
+    race = int(args[2])
+    bike = int(args[3])
+
+    print(args)
+
+
+    race = scrape_results(year, race, bike)
+
     if race:
-        print(f"Round {race['Round']} - {race['Name']}")
-        print(race["Date"])
-        print(f"{race['City']}, {race['State']}")
+        headers: list[Column] = [
+            Column("Position", justify="left"),
+            Column("Number", justify="center"),
+            Column("Rider", justify="left"),
+            Column("Hometown", justify="left"),
+            Column("Bike", justify="left"),
+            Column("Qual", justify="center"),
+            Column("Holeshot", justify="center"),
+            Column("Laps Led", justify="center"),
+            Column("Points", justify="center"),
+        ]
+        table = Table(*headers, title=f"{race['Season']} {race['Name']} {race['Class']} Results")
+
         for result in race["Results"]:
-            print(f"{result['Position']}\t{result['Rider']}")
+            rider = [str(result[stat]) for stat in STATS]
+            table.add_row(*rider)
+
+        console = Console()
+        console.print(table)
 
     else:
         print("Race not found")
