@@ -1,18 +1,26 @@
-from rich.console import Console
-from rich.table import Table, Column
+import datetime
 import re
 import sys
 from typing import Any
 
-import requests
 from bs4 import BeautifulSoup, Tag
+import requests
+from rich.console import Console
+from rich.table import Table, Column
 
+
+FIRST_YEAR = 2013
+NUM_OF_RACES = 17
 RESULTS_URL = "https://www.supercrosslive.com/results/current/"
 URL_POSTFIX = {
-    250: "S2F1PRESS.html",  # official 250 results
-    450: "S1F1PRESS.html",  # official 450 results
-    # 250: "S2F1RES.html",  # provisional 250 results
-    # 450: "S1F1RES.html",  # provisional 450 results
+    "OF": {  # official results
+        250: "S2F1PRESS.html",
+        450: "S1F1PRESS.html",
+    },
+    "PR": {  # provisional results
+        250: "S2F1RES.html",
+        450: "S1F1RES.html",
+    },
 }
 STATS = [
     "Position",
@@ -44,26 +52,37 @@ def scrape_results(season: int, race_num: int, bike: int = 450) -> dict | None:
     if bike not in (250, 450):
         raise ValueError(f"'bike' argument must be 250 or 450; got {bike}")
 
-    official_results_url = f"{_race_url(season, race_num)}/{URL_POSTFIX[bike]}"
+    result_status = ""
 
-    page = requests.get(official_results_url, timeout=5)
-    if page.status_code != 200:
+    for status in ("OF", "PR"):
+        results_url = f"{_race_url(season, race_num)}/{URL_POSTFIX[status][bike]}"
+        page = requests.get(results_url, timeout=5)
+        if page.status_code == 200:
+            result_status = status
+            break
+    else:
         return None
 
     soup = BeautifulSoup(page.content, "html.parser")
-    race_info = soup.find_all("h4", {"class": "header-class"})
+    race_info: list[Tag] = soup.find_all("h4", {"class": "header-class"})
     result_table = soup.find("table")
 
     return {
-        "Season": season,
-        "Round": race_num,
-        "Name": race_info[1].text,
-        "Class": bike,
         "City": _get_city(race_info[2].text),
-        "State": _get_state(race_info[2].text),
+        "Class": bike,
         "Date": _get_date(race_info[3].text),
+        "Name": race_info[1].text,
+        "Results Status": "Official" if result_status == "OF" else "Provisional",
         "Results": _get_results(result_table.find_all("tr")[1:]),  # type: ignore
+        "Round": race_num,
+        "Season": season,
+        "State": _get_state(race_info[2].text),
+        "Triple Crown": _is_triple_cown(soup),
     }
+
+
+def _is_triple_cown(content: BeautifulSoup) -> bool:
+    return content.find("td", {"data-title": "M1"}) is not None
 
 
 def _get_city(val: str) -> str:
@@ -80,20 +99,13 @@ def _get_date(val: str) -> str:
     return ""
 
 
-def _get_td_text(label: str, row: Tag | None, params: dict[str, str]) -> str | int | bool:
-    if not row:
-        return ""
-    if not (td := row.find("td", params)):
-        return ""
-    if td.text.isnumeric():
-        return int(td.text)
-    if label == "Holeshot":
-        return td.text.upper() == "X"
-    return td.text
-
-
 def _get_results(rows: list[Tag]) -> list[dict[str, Any]]:
-    return [{col: _get_td_text(col, row, {"data-title": col}) for col in STATS} for row in rows]
+    _results = []
+    for pos, row in enumerate(rows, 1):
+        _stat = {col: _get_td_text(row, {"data-title": col}) for col in STATS}
+        _stat["Position"] = pos
+        _results.append(_stat)
+    return _results
 
 
 def _get_state(val: str) -> str:
@@ -103,41 +115,80 @@ def _get_state(val: str) -> str:
     return ""
 
 
+def _get_td_text(row: Tag | None, params: dict[str, str]) -> str | int | bool:
+    if not row:
+        return ""
+    if not (td := row.find("td", params)):
+        return ""
+    if td.text.isnumeric():
+        return int(td.text)
+    return td.text
+
+
 def _race_url(season: int, race_num: int) -> str:
-    return f"{RESULTS_URL}{season}/S{str(season)[-2:]}{race_num * 5:02d}"
+    season_path = f"{season}/S{str(season)[-2:]}"
+    if season == 2023 and race_num == 2:
+        # Race 2 in 2023 does not follow the typical numbering convention
+        return f"{RESULTS_URL}{season_path}33"
+    return f"{RESULTS_URL}{season_path}{race_num * 5:02d}"
+
+def _print_results_table(**vals) -> None:
+    race_tile = f"{vals['Season']} Round {vals['Round']} - {vals['Name']} - {vals['Class']}"
+    triple_crown = '(Triple Crown)' if vals['Triple Crown'] else ''
+
+    headers: list[Column] = [
+        Column("Position", justify="left"),
+        Column("Number", justify="center"),
+        Column("Rider", justify="left"),
+        Column("Hometown", justify="left"),
+        Column("Bike", justify="left"),
+        Column("Qual", justify="center"),
+        Column("Holeshot", justify="center"),
+        Column("Laps Led", justify="center"),
+        Column("Points", justify="center"),
+    ]
+    table = Table(
+        *headers,
+        title=f"{race_tile} {vals['Results Status']} Results {triple_crown}",
+    )
+
+    for result in vals["Results"]:
+        rider = [str(result[stat]) for stat in STATS]
+        table.add_row(*rider)
+
+    console = Console()
+    console.print(table)
 
 
 if __name__ == "__main__":
     args = sys.argv
-    year = int(args[1])
-    race = int(args[2])
-    bike = int(args[3])
 
-    print(args)
+    year: int = 0
+    round_num: int = 0
+    bike_size: int = 0
 
+    if len(args) > 1:
+        for arg in args:
+            if arg.isnumeric():
+                if FIRST_YEAR <= int(arg) <= datetime.datetime.now().year:
+                    year = int(arg)
+                elif int(arg) in (250, 450):
+                    bike_size = int(arg)
+                elif 1 <= int(arg) <= NUM_OF_RACES:
+                    round_num = int(arg)
 
-    race = scrape_results(year, race, bike)
+    if not year:
+        year = int(input(f"Enter Year [{FIRST_YEAR} - {datetime.datetime.now()}]: "))
+    if not bike_size:
+        bike_size = int(input("Enter Class [250 or 450]: "))
+    if not round_num:
+        round_num = int(
+            input(f"Enter Round [1-{NUM_OF_RACES}] or 0 for season results: ")
+        )
+
+    race = scrape_results(year, round_num, bike_size)
 
     if race:
-        headers: list[Column] = [
-            Column("Position", justify="left"),
-            Column("Number", justify="center"),
-            Column("Rider", justify="left"),
-            Column("Hometown", justify="left"),
-            Column("Bike", justify="left"),
-            Column("Qual", justify="center"),
-            Column("Holeshot", justify="center"),
-            Column("Laps Led", justify="center"),
-            Column("Points", justify="center"),
-        ]
-        table = Table(*headers, title=f"{race['Season']} {race['Name']} {race['Class']} Results")
-
-        for result in race["Results"]:
-            rider = [str(result[stat]) for stat in STATS]
-            table.add_row(*rider)
-
-        console = Console()
-        console.print(table)
-
+        _print_results_table(**race)
     else:
         print("Race not found")
