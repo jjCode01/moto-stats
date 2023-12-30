@@ -1,13 +1,12 @@
-from datetime import datetime
 import re
 import sys
+from datetime import datetime
 from typing import Any
 
-from bs4 import BeautifulSoup, Tag
 import requests
+from bs4 import BeautifulSoup, Tag
 from rich.console import Console
-from rich.table import Table, Column
-
+from rich.table import Column, Table
 
 FIRST_YEAR = 2013
 NUM_OF_RACES = 17
@@ -47,6 +46,7 @@ SEASON_STATS = [
     *list(range(1, 18)),
 ]
 
+
 def _validate_args(season: int, bike: int) -> None:
     if bike not in (250, 450):
         raise ValueError(f"'bike' must be 250 or 450; got {bike}")
@@ -70,7 +70,7 @@ def scrape_season_results(season: int, bike: int = 450) -> dict | None:
     _validate_args(season, bike)
 
     for _race in range(NUM_OF_RACES, 0, -1):
-        results_url = f"{_race_url(season, _race)}/{URL_POSTFIX["PT"][bike]}"
+        results_url = f"{_race_url(season, _race)}/{URL_POSTFIX['PT'][bike]}"
         page = requests.get(results_url, timeout=5)
         if page.status_code == 200:
             break
@@ -192,9 +192,12 @@ def _race_url(season: int, race_num: int) -> str:
         return f"{RESULTS_URL}{season_path}33"
     return f"{RESULTS_URL}{season_path}{race_num * 5:02d}"
 
+
 def _print_race_results_table(**vals) -> None:
-    race_tile = f"{vals['Season']} Round {vals['Round']} - {vals['Name']} - {vals['Class']}"
-    triple_crown = '(Triple Crown)' if vals['Triple Crown'] else ''
+    race_tile = (
+        f"{vals['Season']} Round {vals['Round']} - {vals['Name']} - {vals['Class']}"
+    )
+    triple_crown = "(Triple Crown)" if vals["Triple Crown"] else ""
 
     headers: list[Column] = [
         Column("Position", justify="left"),
@@ -218,6 +221,7 @@ def _print_race_results_table(**vals) -> None:
 
     console = Console()
     console.print(table)
+
 
 def _print_season_results_table(**vals) -> None:
     season_title = f"{vals['Season']} Season - {vals['Class']} Class"
